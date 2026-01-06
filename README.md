@@ -1,8 +1,12 @@
-# Trafikinfo SE - Alert Card,
+# Trafikinfo SE - Alert Card
 
+[![Buy me a Coffee](https://img.shields.io/badge/Support-Buy%20me%20a%20coffee-fdd734?logo=buy-me-a-coffee)](https://www.buymeacoffee.com/NiklasV) [![Last commit](https://img.shields.io/github/last-commit/Nicxe/homeassistant-trafikinfo-se-card/)](#) [![Version](https://img.shields.io/github/v/release/Nicxe/homeassistant-trafikinfo-se-card/)](#) <br>
+![GitHub Downloads (all assets, latest release)](https://img.shields.io/github/downloads/nicxe/homeassistant-trafikinfo-se-card/latest/total)
+<br>
+<img alt="GitHub Repo stars" src="https://img.shields.io/github/stars/Nicxe/homeassistant-trafikinfo-se">
 
 ## Overview
-This custom card is designed for the [Trafikinfo SE](https://github.com/Nicxe/homeassistant-trafikinfo-se), allowing you to display trafic warnings from the Swedish Transport Administration (Trafikverket) on your Home Assistant dashboards.
+This custom card is designed for the [Trafikinfo SE](https://github.com/Nicxe/homeassistant-trafikinfo-se) allowing you to display trafic warnings from the Swedish Transport Administration (Trafikverket) on your Home Assistant dashboards.
 
 
 ## Installation
@@ -49,47 +53,6 @@ The card can be configured using the dashboard UI editor:
 3. Click the **Plus** button to add a new card.
 4. Find **Custom: SMHI Alert Card** in the list.
 
-### Card Example in YAML
-
-```yaml
-type: custom:trafikinfo-se-alert-card
-preset: accident
-entity: sensor.trafikinfo_se_olycka
-title: ""
-show_header: true
-show_icon: true
-severity_background: false
-hide_when_empty: true
-max_items: 0
-sort_order: severity_then_time
-group_by: none
-filter_severities: []
-filter_roads: ""
-show_road: true
-show_location: true
-show_severity: true
-show_restriction: true
-show_direction: true
-show_period: true
-show_published: true
-show_updated: true
-show_link: true
-show_text: true
-meta_order:
-  - divider
-  - road
-  - location
-  - severity
-  - restriction
-  - direction
-  - period
-  - published
-  - updated
-  - link
-  - text
-use_details: true
-
-```
 
 ## Usage Screenshots
 
