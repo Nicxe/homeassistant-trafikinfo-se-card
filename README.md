@@ -93,6 +93,7 @@ use_details: true
 
 ## Usage Screenshots
 
+<img width="1157" height="587" alt="trafikinfo-se-alert-card" src="https://github.com/user-attachments/assets/af609e0f-ca1e-4445-bb04-9cf681b1f0fb" />
 
 
 
