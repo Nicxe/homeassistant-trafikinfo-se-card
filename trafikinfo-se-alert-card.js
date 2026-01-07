@@ -685,13 +685,71 @@ class TrafikinfoSeAlertCard extends LitElement {
       </div>`;
   }
 
+  _headlineFromConfigFields(item) {
+    const fields = Array.isArray(this.config?.headline_fields)
+      ? this.config.headline_fields.map((x) => String(x)).filter(Boolean)
+      : [];
+    if (fields.length === 0) return '';
+
+    const sepRaw = (this.config?.headline_separator !== undefined)
+      ? String(this.config.headline_separator)
+      : ' ';
+    const sep = sepRaw.length > 0 ? sepRaw : ' ';
+
+    const get = (key) => {
+      switch (String(key)) {
+        case 'header':
+          return String(item?.header || '').trim();
+        case 'message_type':
+          return String(item?.message_type || item?.message_type_value || '').trim();
+        case 'message_type_value':
+          return String(item?.message_type_value || '').trim();
+        case 'road_number':
+          return String(item?.road_number || '').trim();
+        case 'road_name':
+          return String(item?.road_name || '').trim();
+        case 'road':
+          return String(this._fmtRoad(item) || '').trim();
+        case 'location_descriptor':
+          return String(item?.location_descriptor || '').trim();
+        case 'positional_description':
+          return String(item?.positional_description || '').trim();
+        case 'location':
+          return String(item?.location_descriptor || item?.positional_description || '').trim();
+        case 'traffic_restriction_type':
+          return String(item?.traffic_restriction_type || '').trim();
+        case 'restriction':
+          return String(item?.traffic_restriction_type || '').trim();
+        case 'severity_text':
+          return String(item?.severity_text || '').trim();
+        case 'severity':
+          return String(item?.severity_text || (item?.severity_code !== null && item?.severity_code !== undefined ? item?.severity_code : '') || '').trim();
+        case 'direction':
+          return String(item?.affected_direction || item?.affected_direction_value || '').trim();
+        case 'temporary_limit':
+          return String(item?.temporary_limit || '').trim();
+        default:
+          return '';
+      }
+    };
+
+    const parts = fields.map((k) => get(k)).filter((s) => s && s.length > 0);
+    return parts.join(sep).trim();
+  }
+
   _headline(item) {
+    const configured = this._headlineFromConfigFields(item);
+    if (configured) return configured;
+
+    // Default (backwards compatible) behavior:
+    // prefer header/location, fall back to road/type.
     return String(
       item?.header
       || item?.location_descriptor
       || item?.positional_description
       || this._fmtRoad(item)
       || item?.message_type
+      || item?.message_type_value
       || 'Olycka'
     );
   }
@@ -1177,6 +1235,10 @@ class TrafikinfoSeAlertCard extends LitElement {
     if (normalized.sort_order === undefined) normalized.sort_order = 'severity_then_time';
     if (normalized.group_by === undefined) normalized.group_by = 'none';
 
+    // Headline customization (optional). When empty/not set: keep old auto headline behavior.
+    if (!Array.isArray(normalized.headline_fields)) normalized.headline_fields = [];
+    if (normalized.headline_separator === undefined) normalized.headline_separator = ' ';
+
     // Per-meta toggles
     if (normalized.show_road === undefined) normalized.show_road = true;
     if (normalized.show_location === undefined) normalized.show_location = true;
@@ -1272,6 +1334,9 @@ class TrafikinfoSeAlertCard extends LitElement {
       show_updated: true,
       show_link: true,
       show_text: true,
+      // Headline: empty means "auto" (backwards compatible default)
+      headline_fields: [],
+      headline_separator: ' ',
       meta_order: ['road','location','severity','restriction','direction','period','divider','published','updated','link','text','map'],
       tap_action: {},
       double_tap_action: {},
@@ -1307,6 +1372,9 @@ class TrafikinfoSeViktigTrafikinformationCard extends TrafikinfoSeAlertCard {
       show_header: true,
       show_icon: true,
       severity_background: false,
+      // Headline: empty means "auto" (backwards compatible default)
+      headline_fields: [],
+      headline_separator: ' ',
       // If true: period+text are hidden behind the details toggle by default.
       // If false: show everything directly (no details toggle).
       use_details: true,
@@ -1354,6 +1422,25 @@ class TrafikinfoSeAlertCardEditor extends LitElement {
     const schema = [
       { name: 'entity', label: 'Entity', required: true, selector: { entity: { domain: 'sensor' } } },
       { name: 'title', label: 'Title', selector: { text: {} } },
+      {
+        name: 'headline_fields',
+        label: 'Incident headline fields (bold title)',
+        selector: { select: { multiple: true, options: [
+          { value: 'message_type', label: 'Type (message_type)' },
+          { value: 'road_number', label: 'Road number (road_number)' },
+          { value: 'road_name', label: 'Road name (road_name)' },
+          { value: 'road', label: 'Road (combined)' },
+          { value: 'location_descriptor', label: 'Location descriptor (location_descriptor)' },
+          { value: 'positional_description', label: 'Positional description (positional_description)' },
+          { value: 'location', label: 'Location (descriptor or positional)' },
+          { value: 'traffic_restriction_type', label: 'Restriction (traffic_restriction_type)' },
+          { value: 'severity', label: 'Severity (text/code)' },
+          { value: 'direction', label: 'Direction (affected_direction)' },
+          { value: 'temporary_limit', label: 'Temporary speed limit (temporary_limit)' },
+          { value: 'header', label: 'Header (header)' },
+        ] } },
+      },
+      { name: 'headline_separator', label: 'Headline separator', selector: { text: {} } },
       { name: 'show_header', label: 'Show header', selector: { boolean: {} } },
       { name: 'show_icon', label: 'Show icon', selector: { boolean: {} } },
       { name: 'severity_background', label: 'Severity background', selector: { boolean: {} } },
@@ -1399,6 +1486,8 @@ class TrafikinfoSeAlertCardEditor extends LitElement {
     const data = {
       entity: this._config.entity || '',
       title: this._config.title || '',
+      headline_fields: Array.isArray(this._config.headline_fields) ? this._config.headline_fields : [],
+      headline_separator: this._config.headline_separator !== undefined ? String(this._config.headline_separator) : ' ',
       show_header: this._config.show_header !== undefined ? this._config.show_header : true,
       show_icon: this._config.show_icon !== undefined ? this._config.show_icon : true,
       severity_background: this._config.severity_background !== undefined ? this._config.severity_background : false,
@@ -1610,6 +1699,8 @@ class TrafikinfoSeAlertCardEditor extends LitElement {
     const labels = {
       entity: 'Entity',
       title: 'Title',
+      headline_fields: 'Incident headline fields (bold title)',
+      headline_separator: 'Headline separator',
       show_header: 'Show header',
       show_icon: 'Show icon',
       severity_background: 'Severity background',
