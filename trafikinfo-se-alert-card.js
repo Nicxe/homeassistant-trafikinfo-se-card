@@ -194,10 +194,17 @@ class TrafikinfoSeAlertCard extends LitElement {
   }
 
   getCardSize() {
-    const events = this._visibleEvents();
-    if (this.config?.hide_when_empty && (!events || events.length === 0)) return 0;
     const header = this._showHeader() ? 1 : 0;
-    return header + (events ? events.length : 0);
+
+    // Important: HA may call getCardSize() before hass is injected.
+    // If we return 0 here, Lovelace can drop the card entirely from the editor UI.
+    if (!this.hass) return header + 1;
+
+    const events = this._visibleEvents();
+    const count = Array.isArray(events) ? events.length : 0;
+
+    // When empty (including in editor), reserve at least one row for the empty state.
+    return header + (count > 0 ? count : 1);
   }
 
   /**
@@ -212,6 +219,9 @@ class TrafikinfoSeAlertCard extends LitElement {
       columns: 12,
       min_columns: 1,
       max_columns: 12,
+      // In edit mode + empty state, HA Sections can collapse cards to 0 height unless a min is provided.
+      // This keeps the card selectable/movable even when there is no data.
+      min_rows: 1,
     };
   }
 
@@ -338,18 +348,15 @@ class TrafikinfoSeAlertCard extends LitElement {
   render() {
     if (!this.hass || !this.config) return html``;
     const stateObj = this._stateObj();
-    if (!stateObj) return html``;
     const t = this._t.bind(this);
     const events = this._visibleEvents();
 
-    if (this.config.hide_when_empty && events.length === 0) return html``;
-
     const header = this._showHeader()
-      ? (this.config.title || stateObj.attributes?.friendly_name || 'Trafikinfo')
+      ? (this.config.title || stateObj?.attributes?.friendly_name || 'Trafikinfo')
       : undefined;
 
-    const eventsTotal = Number(stateObj.attributes?.events_total || 0);
-    const sensorMaxItems = Number(stateObj.attributes?.max_items ?? null);
+    const eventsTotal = Number(stateObj?.attributes?.events_total || 0);
+    const sensorMaxItems = Number(stateObj?.attributes?.max_items ?? null);
     const hasMoreButCapped = events.length === 0 && eventsTotal > 0 && sensorMaxItems === 0;
     const emptyText = hasMoreButCapped
       ? t('max_items_zero')
@@ -782,7 +789,6 @@ class TrafikinfoSeAlertCard extends LitElement {
     if (normalized.show_header === undefined) normalized.show_header = true;
     if (normalized.show_icon === undefined) normalized.show_icon = true;
     if (normalized.severity_background === undefined) normalized.severity_background = false;
-    if (normalized.hide_when_empty === undefined) normalized.hide_when_empty = false;
     if (normalized.max_items === undefined) normalized.max_items = 0;
     if (normalized.sort_order === undefined) normalized.sort_order = 'severity_then_time';
     if (normalized.group_by === undefined) normalized.group_by = 'none';
@@ -822,6 +828,7 @@ class TrafikinfoSeAlertCard extends LitElement {
     if (String(normalized.preset) === 'important') {
       if (normalized.use_details === undefined) normalized.use_details = true;
       normalized.meta_order = normalized.use_details ? ['divider', 'period', 'text'] : ['period', 'text'];
+      if (Object.prototype.hasOwnProperty.call(normalized, 'hide_when_empty')) delete normalized.hide_when_empty;
       return normalized;
     }
 
@@ -836,6 +843,7 @@ class TrafikinfoSeAlertCard extends LitElement {
     // Remove deprecated toggles if present
     if (Object.prototype.hasOwnProperty.call(normalized, 'show_road_name')) delete normalized.show_road_name;
     if (Object.prototype.hasOwnProperty.call(normalized, 'show_road_number')) delete normalized.show_road_number;
+    if (Object.prototype.hasOwnProperty.call(normalized, 'hide_when_empty')) delete normalized.hide_when_empty;
     return normalized;
   }
 
@@ -855,7 +863,6 @@ class TrafikinfoSeAlertCard extends LitElement {
       show_header: true,
       show_icon: true,
       severity_background: false,
-      hide_when_empty: true,
       max_items: 0,
       sort_order: 'severity_then_time',
       group_by: 'none',
@@ -906,7 +913,6 @@ class TrafikinfoSeViktigTrafikinformationCard extends TrafikinfoSeAlertCard {
       show_header: true,
       show_icon: true,
       severity_background: false,
-      hide_when_empty: true,
       // If true: period+text are hidden behind the details toggle by default.
       // If false: show everything directly (no details toggle).
       use_details: true,
@@ -957,7 +963,6 @@ class TrafikinfoSeAlertCardEditor extends LitElement {
       { name: 'show_header', label: 'Show header', selector: { boolean: {} } },
       { name: 'show_icon', label: 'Show icon', selector: { boolean: {} } },
       { name: 'severity_background', label: 'Severity background', selector: { boolean: {} } },
-      { name: 'hide_when_empty', label: 'Hide when empty', selector: { boolean: {} } },
       // actions
       { name: 'tap_action', label: 'Tap action', selector: { ui_action: {} } },
       { name: 'double_tap_action', label: 'Double tap action', selector: { ui_action: {} } },
@@ -999,7 +1004,6 @@ class TrafikinfoSeAlertCardEditor extends LitElement {
       show_header: this._config.show_header !== undefined ? this._config.show_header : true,
       show_icon: this._config.show_icon !== undefined ? this._config.show_icon : true,
       severity_background: this._config.severity_background !== undefined ? this._config.severity_background : false,
-      hide_when_empty: this._config.hide_when_empty !== undefined ? this._config.hide_when_empty : true,
       use_details: this._config.use_details !== undefined ? this._config.use_details : true,
       max_items: this._config.max_items ?? 0,
       sort_order: this._config.sort_order || 'severity_then_time',
@@ -1204,7 +1208,6 @@ class TrafikinfoSeAlertCardEditor extends LitElement {
       show_header: 'Show header',
       show_icon: 'Show icon',
       severity_background: 'Severity background',
-      hide_when_empty: 'Hide when empty',
       use_details: 'Use details (collapse/expand)',
       max_items: 'Max items',
       sort_order: 'Sort order',
