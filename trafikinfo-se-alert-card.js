@@ -8,6 +8,10 @@
  */
 import { LitElement, html, css } from 'https://unpkg.com/lit?module';
 
+const LEAFLET_CSS_HREF = 'https://unpkg.com/leaflet@1.9.4/dist/leaflet.css';
+const LEAFLET_JS_SRC = 'https://unpkg.com/leaflet@1.9.4/dist/leaflet.js';
+const LEAFLET_ESM_URL = 'https://unpkg.com/leaflet@1.9.4/dist/leaflet-src.esm.js';
+
 class TrafikinfoSeAlertCard extends LitElement {
   static properties = {
     hass: {},
@@ -22,11 +26,14 @@ class TrafikinfoSeAlertCard extends LitElement {
       --trafikinfo-alert-bg-soft: 12%;
       /* Optical vertical adjustment for the title in compact (1-row) mode */
       --trafikinfo-alert-compact-title-offset: 2px;
+      /* Outer horizontal padding for the list (set to 0 to align with other cards) */
+      --trafikinfo-alert-outer-padding: 0px;
       display: block;
     }
 
     ha-card {
-      padding: 8px 0;
+      /* Keep the container tight so stacking multiple transparent cards doesn't show "gaps" */
+      padding: 0;
       background: transparent;
       box-shadow: none;
       border: none;
@@ -38,7 +45,8 @@ class TrafikinfoSeAlertCard extends LitElement {
       display: flex;
       flex-direction: column;
       gap: 8px;
-      padding: 0 12px 12px 12px;
+      /* No vertical padding: otherwise it becomes visible whitespace between stacked cards */
+      padding: 0 var(--trafikinfo-alert-outer-padding, 0px);
     }
     .area-group {
       display: flex;
@@ -172,8 +180,51 @@ class TrafikinfoSeAlertCard extends LitElement {
     .details .meta + .md-text { margin-top: 6px; }
     .empty {
       color: var(--secondary-text-color);
-      padding: 8px 12px 12px 12px;
+      padding: 8px var(--trafikinfo-alert-outer-padding, 0px);
     }
+
+    /* Optional minimap (Leaflet) */
+    .map-wrap {
+      margin-top: 10px;
+      border-radius: var(--trafikinfo-alert-border-radius, 8px);
+      overflow: hidden;
+      border: 1px solid var(--divider-color);
+      background: var(--card-background-color);
+      position: relative;
+    }
+    .geo-map {
+      width: 100%;
+      height: var(--trafikinfo-alert-map-height, 170px);
+    }
+    .map-status {
+      position: absolute;
+      inset: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 0.9em;
+      color: var(--secondary-text-color);
+      background: color-mix(in srgb, var(--card-background-color) 85%, transparent);
+      pointer-events: none;
+      opacity: 0;
+      transition: opacity 120ms ease;
+    }
+    .map-status.show { opacity: 1; }
+    /* Leaflet controls: allow zoom buttons, hide attribution to keep the card clean */
+    .geo-map .leaflet-control-attribution { display: none; }
+    .geo-map .leaflet-control-zoom {
+      box-shadow: none;
+      border: 1px solid var(--divider-color);
+      border-radius: 6px;
+      overflow: hidden;
+      margin: 8px;
+    }
+    .geo-map .leaflet-control-zoom a {
+      background: color-mix(in srgb, var(--card-background-color) 92%, transparent);
+      color: var(--primary-text-color);
+      border-bottom: 1px solid var(--divider-color);
+    }
+    .geo-map .leaflet-control-zoom a:last-child { border-bottom: none; }
 
     /* Editor-only controls */
     .meta-fields { margin: 12px 0; padding: 0 12px; }
@@ -185,6 +236,11 @@ class TrafikinfoSeAlertCard extends LitElement {
     a { color: var(--primary-color); text-decoration: none; }
     a:hover { text-decoration: underline; }
   `;
+
+  constructor() {
+    super();
+    this._maps = new Map();
+  }
 
   setConfig(config) {
     if (!config?.entity) throw new Error('You must specify an entity.');
@@ -355,6 +411,9 @@ class TrafikinfoSeAlertCard extends LitElement {
       ? (this.config.title || stateObj?.attributes?.friendly_name || 'Trafikinfo')
       : undefined;
 
+    const mapHeight = Number(this.config?.map_height || 170);
+    const mapStyle = this.config?.show_map ? `--trafikinfo-alert-map-height: ${mapHeight}px;` : '';
+
     const eventsTotal = Number(stateObj?.attributes?.events_total || 0);
     const sensorMaxItems = Number(stateObj?.attributes?.max_items ?? null);
     const hasMoreButCapped = events.length === 0 && eventsTotal > 0 && sensorMaxItems === 0;
@@ -363,7 +422,7 @@ class TrafikinfoSeAlertCard extends LitElement {
       : t('no_alerts');
 
     return html`
-      <ha-card .header=${header}>
+      <ha-card .header=${header} style=${mapStyle}>
         ${events.length === 0
           ? html`<div class="empty">${emptyText}</div>`
           : html`<div class="alerts">${this._renderGrouped(events)}</div>`}
@@ -402,7 +461,7 @@ class TrafikinfoSeAlertCard extends LitElement {
     }
     return keys.map((key) => html`
       <div class="area-group">
-        <div class="meta" style="margin: 0 12px;">${key}</div>
+        <div class="meta" style="margin: 0;">${key}</div>
         ${groups[key].map((item, idx) => this._renderAlert(item, idx))}
       </div>
     `);
@@ -413,10 +472,33 @@ class TrafikinfoSeAlertCard extends LitElement {
     const sevClass = this._severityClass(item);
     const sevBgClass = this.config?.severity_background ? 'bg-severity' : '';
     const showIcon = this.config.show_icon !== false;
-    const preset = String(this.config?.preset || 'accident');
 
     const headline = this._headline(item);
     const detailsText = this._detailsText(item);
+
+    const mkMapBlock = () => {
+      if (!this.config?.show_map) return null;
+      const wkt = String(item?.geometry_wgs84 || '').trim();
+      if (!wkt) return null;
+      const key = this._alertKey(item, idx);
+      const mapId = `trafikinfo-alert-map-${this._sanitizeDomId(key)}`;
+      const statusId = `trafikinfo-alert-map-status-${this._sanitizeDomId(key)}`;
+      return html`
+        <div
+          class="map-wrap"
+          @pointerdown=${(e) => e.stopPropagation()}
+          @pointerup=${(e) => e.stopPropagation()}
+          @click=${(e) => e.stopPropagation()}
+        >
+          <div id=${statusId} class="map-status show">${t('map_loading')}</div>
+          <div
+            id=${mapId}
+            class="geo-map"
+            data-map-key=${key}
+          ></div>
+        </div>
+      `;
+    };
 
     const metaFields = {
       // Single road field (most information): combines RoadName + RoadNumber when available
@@ -468,10 +550,11 @@ class TrafikinfoSeAlertCard extends LitElement {
             return html`<div class="md-text">${textContent}</div>`;
           })()
         : null,
+      map: mkMapBlock(),
     };
 
     // Divider-driven meta layout
-    const defaultOrder = ['road','location','severity','restriction','direction','period','divider','published','updated','link','text'];
+    const defaultOrder = ['road','location','severity','restriction','direction','period','divider','published','updated','link','text','map'];
     const rawOrder = Array.isArray(this.config.meta_order) && this.config.meta_order.length
       ? this.config.meta_order
       : defaultOrder;
@@ -480,6 +563,7 @@ class TrafikinfoSeAlertCard extends LitElement {
     // (important preset uses divider to allow collapse/expand of details).
     if (!order.includes('divider')) order = [...order, 'divider'];
     if (!order.includes('text')) order = [...order, 'text'];
+    if (!order.includes('map')) order = [...order, 'map'];
     // Remove deprecated/duplicate keys if they exist in saved configs.
     order = order.filter((k) => !['message', 'road_name', 'road_number'].includes(k));
 
@@ -487,24 +571,68 @@ class TrafikinfoSeAlertCard extends LitElement {
     const inlineKeys = dividerIndex >= 0 ? order.slice(0, dividerIndex) : order.filter((k) => k !== 'divider');
     const detailsKeys = dividerIndex >= 0 ? order.slice(dividerIndex + 1) : [];
 
-    const inlineParts = inlineKeys
-      .filter((k) => k !== 'text')
-      .map((key) => metaFields[key])
-      .filter((node) => !!node);
-    const inlineTextBlock = inlineKeys.includes('text') ? metaFields.text : null;
-
-    const detailsParts = detailsKeys
-      .filter((k) => k !== 'text')
-      .map((key) => metaFields[key])
-      .filter((node) => !!node);
-    const detailsTextBlock = detailsKeys.includes('text') ? metaFields.text : null;
-
     const key = this._alertKey(item, idx);
     const hasStored = Object.prototype.hasOwnProperty.call(this._expanded || {}, key);
     const expanded = hasStored ? !!this._expanded[key] : false;
 
-    const expandable = (detailsParts.length > 0 || !!detailsTextBlock);
-    const isCompact = !expanded && inlineParts.length === 0 && !inlineTextBlock;
+    const buildSectionBlocks = (keys, section) => {
+      // Build blocks in order, but group consecutive meta spans into <div class="meta">...</div>
+      const blocks = [];
+      let metaGroup = [];
+      const flushMeta = () => {
+        if (metaGroup.length > 0) {
+          blocks.push(html`<div class="meta">${metaGroup}</div>`);
+          metaGroup = [];
+        }
+      };
+
+      for (const k of keys) {
+        if (k === 'divider') continue;
+        if (k === 'text') {
+          flushMeta();
+          const node = metaFields.text;
+          if (node) blocks.push(section === 'inline' ? html`<div class="details">${node}</div>` : node);
+          continue;
+        }
+        if (k === 'map') {
+          // In details section, only render map when expanded.
+          if (section === 'details' && !expanded) {
+            flushMeta();
+            continue;
+          }
+          flushMeta();
+          const node = metaFields.map;
+          if (node) blocks.push(section === 'inline' ? html`<div class="details">${node}</div>` : node);
+          continue;
+        }
+        const span = metaFields[k];
+        if (span) metaGroup.push(span);
+      }
+
+      flushMeta();
+      return blocks;
+    };
+
+    const sectionHasPotentialContent = (keys) => {
+      for (const k of keys) {
+        if (k === 'divider') continue;
+        if (k === 'text') {
+          if (this.config.show_text !== false && !!detailsText) return true;
+          continue;
+        }
+        if (k === 'map') {
+          if (this.config?.show_map && !!String(item?.geometry_wgs84 || '').trim()) return true;
+          continue;
+        }
+        if (metaFields[k]) return true;
+      }
+      return false;
+    };
+
+    const inlineBlocks = buildSectionBlocks(inlineKeys, 'inline');
+    const detailsBlocks = buildSectionBlocks(detailsKeys, 'details');
+    const expandable = sectionHasPotentialContent(detailsKeys);
+    const isCompact = !expanded && inlineBlocks.length === 0;
 
     return html`
       <div
@@ -521,14 +649,12 @@ class TrafikinfoSeAlertCard extends LitElement {
           <div class="title">
             <div class="headline ${isCompact ? 'compact' : ''}">${headline}</div>
           </div>
-          ${inlineParts.length > 0 ? html`<div class="meta">${inlineParts}</div>` : html``}
-          ${inlineTextBlock ? html`<div class="details">${inlineTextBlock}</div>` : html``}
+          ${inlineBlocks.length > 0 ? html`${inlineBlocks}` : html``}
           ${expandable
             ? html`
                 <div class="details">
                   ${expanded ? html`
-                    ${detailsParts.length > 0 ? html`<div class="meta">${detailsParts}</div>` : html``}
-                    ${detailsTextBlock ? html`${detailsTextBlock}` : html``}
+                    ${detailsBlocks.length > 0 ? html`${detailsBlocks}` : html``}
                   ` : html``}
                 </div>
               `
@@ -681,6 +807,252 @@ class TrafikinfoSeAlertCard extends LitElement {
     return this.config?.show_header !== false;
   }
 
+  updated() {
+    this._maybeInitMaps();
+  }
+
+  _maybeInitMaps() {
+    if (!this.config?.show_map) return;
+    if (!this.renderRoot) return;
+
+    const events = this._visibleEvents();
+    const rawOrder = Array.isArray(this.config.meta_order) && this.config.meta_order.length
+      ? this.config.meta_order
+      : ['road','location','severity','restriction','direction','period','divider','published','updated','link','text','map'];
+    let order = rawOrder.filter((k, i) => rawOrder.indexOf(k) === i);
+    if (!order.includes('divider')) order = [...order, 'divider'];
+    if (!order.includes('text')) order = [...order, 'text'];
+    if (!order.includes('map')) order = [...order, 'map'];
+    const dividerIndex = order.indexOf('divider');
+    const inlineKeys = dividerIndex >= 0 ? order.slice(0, dividerIndex) : order.filter((k) => k !== 'divider');
+    const detailsKeys = dividerIndex >= 0 ? order.slice(dividerIndex + 1) : [];
+    const mapInInline = inlineKeys.includes('map');
+    const mapInDetails = detailsKeys.includes('map');
+
+    const activeKeys = new Set();
+    for (let i = 0; i < events.length; i++) {
+      const item = events[i];
+      const key = this._alertKey(item, i);
+      const expanded = !!this._expanded?.[key];
+      const mapVisible = (mapInInline || (mapInDetails && expanded));
+      if (!mapVisible) continue;
+      const wkt = String(item?.geometry_wgs84 || '').trim();
+      if (!wkt) continue;
+
+      const mapId = `trafikinfo-alert-map-${this._sanitizeDomId(key)}`;
+      const el = this.renderRoot.querySelector(`#${mapId}`);
+      if (!el) continue;
+      activeKeys.add(key);
+      this._ensureLeafletAndRenderMap(key, el, wkt, item).catch(() => {
+        const statusEl = this.renderRoot?.querySelector?.(`#trafikinfo-alert-map-status-${this._sanitizeDomId(key)}`);
+        if (statusEl) {
+          statusEl.textContent = this._t('map_failed');
+          statusEl.classList.add('show');
+        }
+      });
+    }
+
+    // Cleanup maps that are no longer rendered (collapsed/filtered away)
+    for (const [key, entry] of this._maps.entries()) {
+      if (activeKeys.has(key)) continue;
+      try { entry?.map?.remove?.(); } catch (e) {}
+      this._maps.delete(key);
+    }
+  }
+
+  _sanitizeDomId(value) {
+    return String(value || '').replace(/[^a-zA-Z0-9\-_]/g, '_');
+  }
+
+  _severityStyle(item) {
+    // Align with the card severity colors used for the left stripe.
+    const bucket = this._severityBucket(item);
+    const accentVar =
+      bucket === 'HIGH' ? 'var(--trafikinfo-alert-red, var(--error-color, #e74c3c))'
+      : bucket === 'MEDIUM' ? 'var(--trafikinfo-alert-orange, #e67e22)'
+      : bucket === 'LOW' ? 'var(--trafikinfo-alert-yellow, #f1c40f)'
+      : 'var(--trafikinfo-alert-message, var(--primary-color))';
+    return {
+      color: accentVar,
+      fillColor: accentVar,
+      weight: 3,
+      opacity: 0.95,
+      fillOpacity: 0.22,
+    };
+  }
+
+  _wktLonLatPoints(wkt) {
+    // WKT in Trafikverket WGS84 comes as lon/lat pairs (e.g. "POINT (11.97 57.70)").
+    // We extract all numbers and treat them as lon/lat(/z) sequences.
+    try {
+      const s = String(wkt || '').trim();
+      if (!s) return [];
+      const header = s.split('(')[0].toUpperCase();
+      const dim = (header.includes(' Z') || header.endsWith('Z')) ? 3 : 2;
+      const nums = s.match(/[-+]?\d+(?:\.\d+)?/g) || [];
+      const floats = nums.map((n) => Number(n)).filter((n) => Number.isFinite(n));
+      if (floats.length < 2) return [];
+      const step = dim === 3 ? 3 : 2;
+      const pts = [];
+      for (let i = 0; i + 1 < floats.length; i += step) {
+        const lon = floats[i];
+        const lat = floats[i + 1];
+        if (!Number.isFinite(lon) || !Number.isFinite(lat)) continue;
+        pts.push([lat, lon]); // Leaflet wants [lat, lon]
+      }
+      return pts;
+    } catch (e) {
+      return [];
+    }
+  }
+
+  async _ensureLeafletAndRenderMap(key, containerEl, wkt, item) {
+    this._ensureLeafletCssInShadowRoot();
+    const statusEl = this.renderRoot?.querySelector?.(`#trafikinfo-alert-map-status-${this._sanitizeDomId(key)}`);
+    if (statusEl) {
+      statusEl.textContent = this._t('map_loading_leaflet');
+      statusEl.classList.add('show');
+    }
+    const L = await this._ensureLeaflet();
+    if (!L) return;
+
+    const pts = this._wktLonLatPoints(wkt);
+    if (!pts.length) {
+      if (statusEl) {
+        statusEl.textContent = this._t('map_failed');
+        statusEl.classList.add('show');
+      }
+      return;
+    }
+    const sig = `${pts.length}|${String(pts[0]?.[0] || '')},${String(pts[0]?.[1] || '')}|${this._severityBucket(item)}`;
+    const existing = this._maps.get(key);
+    const containerChanged = existing?.container && existing.container !== containerEl;
+    if (existing && containerChanged) {
+      try { existing.map.remove(); } catch (e) {}
+      this._maps.delete(key);
+    }
+
+    let entry = this._maps.get(key);
+    if (!entry) {
+      const map = L.map(containerEl, {
+        zoomControl: this.config?.map_zoom_controls !== false,
+        attributionControl: false,
+        scrollWheelZoom: this.config?.map_scroll_wheel === true,
+        doubleClickZoom: true,
+        boxZoom: false,
+        keyboard: false,
+        touchZoom: true,
+        tap: false,
+      });
+      L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+        maxZoom: 18,
+        attribution: '&copy; OpenStreetMap contributors',
+      }).addTo(map);
+      entry = { map, layer: null, sig: '', container: containerEl };
+      this._maps.set(key, entry);
+    }
+
+    if (entry.sig !== sig) {
+      if (statusEl) {
+        statusEl.textContent = this._t('map_rendering');
+        statusEl.classList.add('show');
+      }
+      try { entry.layer?.remove?.(); } catch (e) {}
+
+      const style = this._severityStyle(item);
+      const zoomOutSteps = 2; // default: zoom out a bit for better overview
+      if (pts.length === 1) {
+        entry.layer = L.circleMarker(pts[0], { ...style, radius: 8 }).addTo(entry.map);
+        entry.map.setView(pts[0], 14);
+        try { entry.map.zoomOut(zoomOutSteps); } catch (e) {}
+      } else {
+        // If multiple points, draw a polyline and fit bounds.
+        entry.layer = L.polyline(pts, style).addTo(entry.map);
+        try {
+          const bounds = entry.layer.getBounds?.();
+          if (bounds && bounds.isValid && bounds.isValid()) {
+            entry.map.fitBounds(bounds, { padding: [12, 12] });
+            try { entry.map.zoomOut(zoomOutSteps); } catch (e) {}
+          }
+        } catch (e) {}
+      }
+      entry.sig = sig;
+    }
+
+    requestAnimationFrame(() => {
+      try { entry.map.invalidateSize(); } catch (e) {}
+    });
+
+    if (statusEl) {
+      statusEl.classList.remove('show');
+      statusEl.textContent = '';
+    }
+  }
+
+  _ensureLeaflet() {
+    window.__trafikinfoSeLeafletPromise = window.__trafikinfoSeLeafletPromise || null;
+    if (window.L && window.L.map) return Promise.resolve(window.L);
+    if (window.__trafikinfoSeLeafletPromise) return window.__trafikinfoSeLeafletPromise;
+
+    window.__trafikinfoSeLeafletPromise = (async () => {
+      try {
+        const mod = await this._withTimeout(import(LEAFLET_ESM_URL), 12000, 'Leaflet ESM import timed out');
+        const L = mod?.default || mod?.L || mod;
+        if (L && L.map) {
+          window.L = window.L || L;
+          return L;
+        }
+        throw new Error('Leaflet ESM loaded but did not expose L.map');
+      } catch (err) {
+        const jsId = 'trafikinfo-se-leaflet-js';
+        return await new Promise((resolve, reject) => {
+          try {
+            if (window.L && window.L.map) {
+              resolve(window.L);
+              return;
+            }
+            let script = document.getElementById(jsId);
+            if (!script) {
+              script = document.createElement('script');
+              script.id = jsId;
+              script.src = LEAFLET_JS_SRC;
+              script.async = true;
+              document.head.appendChild(script);
+            }
+            script.addEventListener('load', () => resolve(window.L));
+            script.addEventListener('error', () => reject(err || new Error('Failed to load Leaflet')));
+          } catch (e) {
+            reject(err || e);
+          }
+        });
+      }
+    })();
+
+    return window.__trafikinfoSeLeafletPromise;
+  }
+
+  _withTimeout(promise, ms, message) {
+    return new Promise((resolve, reject) => {
+      const t = setTimeout(() => reject(new Error(message || 'Timed out')), ms);
+      promise.then((v) => { clearTimeout(t); resolve(v); }).catch((e) => { clearTimeout(t); reject(e); });
+    });
+  }
+
+  _ensureLeafletCssInShadowRoot() {
+    const id = 'trafikinfo-se-leaflet-css-shadow';
+    try {
+      if (!this.renderRoot) return;
+      if (this.renderRoot.querySelector(`#${id}`)) return;
+      const link = document.createElement('link');
+      link.id = id;
+      link.rel = 'stylesheet';
+      link.href = LEAFLET_CSS_HREF;
+      this.renderRoot.appendChild(link);
+    } catch (e) {
+      // ignore
+    }
+  }
+
   shouldUpdate(changed) {
     if (changed.has('config')) return true;
     if (changed.has('hass')) {
@@ -748,6 +1120,10 @@ class TrafikinfoSeAlertCard extends LitElement {
         hide_details: 'Hide details',
         unknown: 'Unknown',
         until_further_notice: 'Until further notice',
+        map_loading: 'Loading map…',
+        map_loading_leaflet: 'Loading map (Leaflet)…',
+        map_rendering: 'Rendering location…',
+        map_failed: 'Map failed to load (blocked by browser/HA CSP)',
       },
       sv: {
         no_alerts: 'Inga olyckor',
@@ -773,6 +1149,10 @@ class TrafikinfoSeAlertCard extends LitElement {
         hide_details: 'Dölj detaljer',
         unknown: 'Okänt',
         until_further_notice: 'Tills vidare',
+        map_loading: 'Laddar karta…',
+        map_loading_leaflet: 'Laddar karta (Leaflet)…',
+        map_rendering: 'Ritar plats…',
+        map_failed: 'Kartan kunde inte laddas (blockerad av webbläsare/HA CSP)',
       },
     };
     return (dict[lang] || dict.en)[key] || key;
@@ -789,6 +1169,10 @@ class TrafikinfoSeAlertCard extends LitElement {
     if (normalized.show_header === undefined) normalized.show_header = true;
     if (normalized.show_icon === undefined) normalized.show_icon = true;
     if (normalized.severity_background === undefined) normalized.severity_background = false;
+    if (normalized.show_map === undefined) normalized.show_map = false;
+    if (normalized.map_height === undefined) normalized.map_height = 170;
+    if (normalized.map_zoom_controls === undefined) normalized.map_zoom_controls = true;
+    if (normalized.map_scroll_wheel === undefined) normalized.map_scroll_wheel = false;
     if (normalized.max_items === undefined) normalized.max_items = 0;
     if (normalized.sort_order === undefined) normalized.sort_order = 'severity_then_time';
     if (normalized.group_by === undefined) normalized.group_by = 'none';
@@ -828,15 +1212,19 @@ class TrafikinfoSeAlertCard extends LitElement {
     if (String(normalized.preset) === 'important') {
       if (normalized.use_details === undefined) normalized.use_details = true;
       normalized.meta_order = normalized.use_details ? ['divider', 'period', 'text'] : ['period', 'text'];
+      // Keep map off by default for important preset (often national/unlocated).
+      if (normalized.show_map === undefined) normalized.show_map = false;
       if (Object.prototype.hasOwnProperty.call(normalized, 'hide_when_empty')) delete normalized.hide_when_empty;
       return normalized;
     }
 
     if (!Array.isArray(normalized.meta_order) || normalized.meta_order.length === 0) {
-      normalized.meta_order = ['road','location','severity','restriction','direction','period','divider','published','updated','link','text'];
+      // Default: keep map in the details section (after divider) so the list stays compact.
+      normalized.meta_order = ['road','location','severity','restriction','direction','period','divider','published','updated','link','text','map'];
     } else {
       if (!normalized.meta_order.includes('text')) normalized.meta_order = [...normalized.meta_order, 'text'];
       if (!normalized.meta_order.includes('divider')) normalized.meta_order = [...normalized.meta_order, 'divider'];
+      if (!normalized.meta_order.includes('map')) normalized.meta_order = [...normalized.meta_order, 'map'];
       // If old configs had `message` in the order, remove it (it was duplicating `text`)
       normalized.meta_order = normalized.meta_order.filter((k) => !['message', 'road_name', 'road_number'].includes(k));
     }
@@ -844,6 +1232,8 @@ class TrafikinfoSeAlertCard extends LitElement {
     if (Object.prototype.hasOwnProperty.call(normalized, 'show_road_name')) delete normalized.show_road_name;
     if (Object.prototype.hasOwnProperty.call(normalized, 'show_road_number')) delete normalized.show_road_number;
     if (Object.prototype.hasOwnProperty.call(normalized, 'hide_when_empty')) delete normalized.hide_when_empty;
+    // Ensure numeric
+    normalized.map_height = Number(normalized.map_height || 170);
     return normalized;
   }
 
@@ -863,6 +1253,10 @@ class TrafikinfoSeAlertCard extends LitElement {
       show_header: true,
       show_icon: true,
       severity_background: false,
+      show_map: false,
+      map_height: 170,
+      map_zoom_controls: true,
+      map_scroll_wheel: false,
       max_items: 0,
       sort_order: 'severity_then_time',
       group_by: 'none',
@@ -878,7 +1272,7 @@ class TrafikinfoSeAlertCard extends LitElement {
       show_updated: true,
       show_link: true,
       show_text: true,
-      meta_order: ['road','location','severity','restriction','direction','period','divider','published','updated','link','text'],
+      meta_order: ['road','location','severity','restriction','direction','period','divider','published','updated','link','text','map'],
       tap_action: {},
       double_tap_action: {},
       hold_action: {},
@@ -973,6 +1367,10 @@ class TrafikinfoSeAlertCardEditor extends LitElement {
     }
     if (preset !== 'important') {
       schema.splice(6, 0,
+        { name: 'show_map', label: 'Show map (location)', selector: { boolean: {} } },
+        { name: 'map_height', label: 'Map height (px)', selector: { number: { min: 90, max: 420, mode: 'box' } } },
+        { name: 'map_zoom_controls', label: 'Map zoom controls (+/−)', selector: { boolean: {} } },
+        { name: 'map_scroll_wheel', label: 'Map scroll wheel zoom', selector: { boolean: {} } },
         { name: 'max_items', label: 'Max items', selector: { number: { min: 0, mode: 'box' } } },
         {
           name: 'sort_order', label: 'Sort order',
@@ -1004,6 +1402,10 @@ class TrafikinfoSeAlertCardEditor extends LitElement {
       show_header: this._config.show_header !== undefined ? this._config.show_header : true,
       show_icon: this._config.show_icon !== undefined ? this._config.show_icon : true,
       severity_background: this._config.severity_background !== undefined ? this._config.severity_background : false,
+      show_map: this._config.show_map !== undefined ? this._config.show_map : false,
+      map_height: this._config.map_height !== undefined ? this._config.map_height : 170,
+      map_zoom_controls: this._config.map_zoom_controls !== undefined ? this._config.map_zoom_controls : true,
+      map_scroll_wheel: this._config.map_scroll_wheel !== undefined ? this._config.map_scroll_wheel : false,
       use_details: this._config.use_details !== undefined ? this._config.use_details : true,
       max_items: this._config.max_items ?? 0,
       sort_order: this._config.sort_order || 'severity_then_time',
@@ -1031,14 +1433,14 @@ class TrafikinfoSeAlertCardEditor extends LitElement {
     // Keep "important" preset editor minimal (message + period). Accident preset keeps the full set.
     const allowed = (preset === 'important')
       ? ['period']
-      : ['road','location','severity','restriction','direction','period','published','updated','link'];
+      : ['road','location','severity','restriction','direction','period','published','updated','link','map'];
     const special = (preset === 'important')
       ? ['text']
       : ['divider','text'];
     const allowedWithSpecial = [...allowed, ...special];
     const currentOrderRaw = (this._config.meta_order && Array.isArray(this._config.meta_order) && this._config.meta_order.length)
       ? this._config.meta_order.filter((k) => allowedWithSpecial.includes(k))
-      : ['road','location','severity','restriction','direction','period','divider','published','updated','link','text'];
+      : ['road','location','severity','restriction','direction','period','divider','published','updated','link','text','map'];
     let currentOrder = [...currentOrderRaw];
     if (!currentOrder.includes('text')) currentOrder.push('text');
     if (preset !== 'important') {
@@ -1128,6 +1530,7 @@ class TrafikinfoSeAlertCardEditor extends LitElement {
     if (key === 'updated') return this._config.show_updated !== false;
     if (key === 'link') return this._config.show_link !== false;
     if (key === 'text') return this._config.show_text !== false;
+    if (key === 'map') return this._config.show_map === true;
     if (key === 'divider') return true;
     return true;
   }
@@ -1145,6 +1548,7 @@ class TrafikinfoSeAlertCardEditor extends LitElement {
     else if (key === 'updated') next.show_updated = on;
     else if (key === 'link') next.show_link = on;
     else if (key === 'text') next.show_text = on;
+    else if (key === 'map') next.show_map = on;
     this._config = next;
     this.dispatchEvent(new CustomEvent('config-changed', { detail: { config: next } }));
   }
@@ -1153,7 +1557,7 @@ class TrafikinfoSeAlertCardEditor extends LitElement {
     const preset = String(this._config?.preset || 'accident');
     const baseKeys = (preset === 'important')
       ? ['period']
-      : ['road','location','severity','restriction','direction','period','published','updated','link'];
+      : ['road','location','severity','restriction','direction','period','published','updated','link','map'];
     const specialKeys = (preset === 'important')
       ? ['text']
       : ['divider','text'];
@@ -1190,6 +1594,7 @@ class TrafikinfoSeAlertCardEditor extends LitElement {
       published: 'Published',
       updated: 'Updated',
       link: 'Link',
+      map: 'Map',
       subtype: 'Type',
       temporary_limit: 'Temporary speed limit',
       lanes_restricted: 'Lanes restricted',
@@ -1208,6 +1613,10 @@ class TrafikinfoSeAlertCardEditor extends LitElement {
       show_header: 'Show header',
       show_icon: 'Show icon',
       severity_background: 'Severity background',
+      show_map: 'Show map (location)',
+      map_height: 'Map height (px)',
+      map_zoom_controls: 'Map zoom controls (+/−)',
+      map_scroll_wheel: 'Map scroll wheel zoom',
       use_details: 'Use details (collapse/expand)',
       max_items: 'Max items',
       sort_order: 'Sort order',
