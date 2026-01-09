@@ -428,9 +428,10 @@ class TrafikinfoSeAlertCard extends LitElement {
     const eventsTotal = Number(stateObj?.attributes?.events_total || 0);
     const sensorMaxItems = Number(stateObj?.attributes?.max_items ?? null);
     const hasMoreButCapped = events.length === 0 && eventsTotal > 0 && sensorMaxItems === 0;
+    const category = String(stateObj?.attributes?.message_type || '').trim();
     const emptyText = hasMoreButCapped
       ? t('max_items_zero')
-      : t('no_alerts');
+      : this._emptyTextForCategory(category);
 
     return html`
       <ha-card .header=${header} style=${mapStyle}>
@@ -761,8 +762,33 @@ class TrafikinfoSeAlertCard extends LitElement {
       || this._fmtRoad(item)
       || item?.message_type
       || item?.message_type_value
-      || 'Olycka'
+      || this._t('incident')
     );
+  }
+
+  _emptyTextForCategory(category) {
+    const t = this._t.bind(this);
+    const lang = (this.hass?.language || this.hass?.locale?.language || 'en').toLowerCase();
+    const sv = {
+      'Viktig trafikinformation': 'Ingen viktig trafikinformation',
+      'Hinder': 'Inga hinder',
+      'Olycka': 'Inga olyckor',
+      'Restriktion': 'Inga restriktioner',
+      'Trafikmeddelande': 'Inga trafikmeddelanden',
+      'Vägarbete': 'Inga vägarbeten',
+    };
+    const en = {
+      'Important traffic information': 'No important traffic information',
+      'Obstacle': 'No obstacles',
+      'Accident': 'No accidents',
+      'Restriction': 'No restrictions',
+      'Traffic message': 'No traffic messages',
+      'Roadwork': 'No roadworks',
+    };
+    if (lang.startsWith('sv')) {
+      return sv[category] || t('no_alerts');
+    }
+    return en[category] || t('no_alerts');
   }
 
   _detailsText(item) {
@@ -1168,6 +1194,7 @@ class TrafikinfoSeAlertCard extends LitElement {
       en: {
         no_alerts: 'No incidents',
         max_items_zero: 'Incidents exist but are not exposed to the UI. Increase max_items in the Trafikinfo SE integration options.',
+        incident: 'Incident',
         road: 'Road',
         location: 'Location',
         severity: 'Severity',
@@ -1195,8 +1222,9 @@ class TrafikinfoSeAlertCard extends LitElement {
         map_failed: 'Map failed to load (blocked by browser/HA CSP)',
       },
       sv: {
-        no_alerts: 'Inga olyckor',
-        max_items_zero: 'Olyckor finns men listas inte i sensorn. Höj max_items i Trafikinfo SE-integrationens inställningar.',
+        no_alerts: 'Inga händelser',
+        max_items_zero: 'Händelser finns men listas inte i sensorn. Höj max_items i Trafikinfo SE-integrationens inställningar.',
+        incident: 'Händelse',
         road: 'Väg',
         location: 'Plats',
         severity: 'Allvarlighetsgrad',
@@ -1315,14 +1343,27 @@ class TrafikinfoSeAlertCard extends LitElement {
   }
 
   static getStubConfig(hass, entities) {
-    const suggested = (entities || []).find((e) => e === 'sensor.trafikinfo_se_olycka')
-      || (entities || []).find((e) => e && e.startsWith('sensor.trafikinfo_se_'))
-      || (entities || []).find((e) => e && e.startsWith('sensor.'))
+    // Prefer a relevant Trafikinfo SE "incident" sensor for previews.
+    // Avoid auto-picking the "important traffic information" sensor (that makes selection confusing).
+    const candidates = [
+      'sensor.trafikinfo_se_olycka',
+      'sensor.trafikinfo_se_hinder',
+      'sensor.trafikinfo_se_vägarbete',
+      'sensor.trafikinfo_se_restriktioner',
+      'sensor.trafikinfo_se_trafikmeddelande',
+    ];
+    const suggested =
+      candidates.map((id) => (entities || []).find((e) => e === id)).find(Boolean)
+      || (entities || []).find((e) => {
+        const s = String(e || '');
+        return s.startsWith('sensor.trafikinfo_se_') && !s.includes('viktig_trafikinformation');
+      })
       || '';
     return {
       preset: 'accident',
       entity: suggested,
-      title: '',
+      // Make the "Add card" preview clearly show which card this is.
+      title: 'Händelser',
       show_header: true,
       show_icon: true,
       severity_background: false,
@@ -1371,15 +1412,16 @@ class TrafikinfoSeViktigTrafikinformationCard extends TrafikinfoSeAlertCard {
   }
 
   static getStubConfig(hass, entities) {
+    // For the "important" preset, prefer the important traffic information sensor.
+    // Do not fall back to arbitrary sensors as it makes the card selection unclear.
     const suggested = (entities || []).find((e) => e === 'sensor.trafikinfo_se_viktig_trafikinformation')
-      || (entities || []).find((e) => e && e.includes('viktig_trafikinformation'))
-      || (entities || []).find((e) => e && e.startsWith('sensor.trafikinfo_se_'))
-      || (entities || []).find((e) => e && e.startsWith('sensor.'))
+      || (entities || []).find((e) => e && String(e).includes('viktig_trafikinformation'))
       || '';
     return {
       preset: 'important',
       entity: suggested,
-      title: '',
+      // Make the "Add card" preview clearly show which card this is.
+      title: 'Viktig trafikinformation',
       show_header: true,
       show_icon: true,
       severity_background: false,
@@ -1431,7 +1473,8 @@ class TrafikinfoSeAlertCardEditor extends LitElement {
     if (!this.hass || !this._config) return html``;
     const preset = String(this._config.preset || 'accident');
     const schema = [
-      { name: 'entity', label: 'Entity', required: true, selector: { entity: { domain: 'sensor' } } },
+      // Restrict the picker to the Trafikinfo SE integration sensors for clarity.
+      { name: 'entity', label: 'Entity', required: true, selector: { entity: { domain: 'sensor', integration: 'trafikinfo_se' } } },
       { name: 'title', label: 'Title', selector: { text: {} } },
       {
         name: 'headline_fields',
@@ -1741,15 +1784,15 @@ if (!customElements.get('trafikinfo-se-alert-card-editor')) {
 window.customCards = window.customCards || [];
 window.customCards.push({
   type: 'trafikinfo-se-alert-card',
-  name: 'Trafikinfo SE – Olyckor',
-  description: 'Displays Trafikinfo SE incidents (default: accidents) using the Trafikinfo SE integration sensors',
+  name: 'Trafikinfo SE – Händelser (Olycka/Hinder/Vägarbete/Restriktion)',
+  description: 'Använd med en av Trafikinfo SE-sensorerna för händelser, t.ex. sensor.trafikinfo_se_olycka / sensor.trafikinfo_se_hinder / sensor.trafikinfo_se_vägarbete / sensor.trafikinfo_se_restriktioner / sensor.trafikinfo_se_trafikmeddelande.',
   preview: true,
 });
 
 window.customCards.push({
   type: 'trafikinfo-se-viktig-trafikinformation-card',
   name: 'Trafikinfo SE – Viktig trafikinformation',
-  description: 'Displays Trafikinfo SE important traffic information incidents using the Trafikinfo SE integration sensors',
+  description: 'Använd med sensor.trafikinfo_se_viktig_trafikinformation.',
   preview: true,
 });
 
