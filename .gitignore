@@ -1,5 +1,6 @@
 # Node modules
 node_modules/
+npm-debug.log*
 
 # Build output
 /dist/
@@ -13,3 +14,4 @@ node_modules/
 
 # Logs
 npm-debug.log*
+/.npm-cache
