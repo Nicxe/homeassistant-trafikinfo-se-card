@@ -1,22 +1,19 @@
 # Trafikinfo SE - Alert Card
 
-[![Buy me a Coffee](https://img.shields.io/badge/Support-Buy%20me%20a%20coffee-fdd734?logo=buy-me-a-coffee)](https://www.buymeacoffee.com/NiklasV) [![Last commit](https://img.shields.io/github/last-commit/Nicxe/homeassistant-trafikinfo-se-card/)](#) [![Version](https://img.shields.io/github/v/release/Nicxe/homeassistant-trafikinfo-se-card/)](#) <br>
-![GitHub Downloads (all assets, latest release)](https://img.shields.io/github/downloads/nicxe/homeassistant-trafikinfo-se-card/latest/total)
-<br>
-<img alt="GitHub Repo stars" src="https://img.shields.io/github/stars/Nicxe/homeassistant-trafikinfo-se">
+[![Buy me a Coffee](https://img.shields.io/badge/Support-Buy%20me%20a%20coffee-fdd734?logo=buy-me-a-coffee)](https://www.buymeacoffee.com/NiklasV) ![GitHub Release](https://img.shields.io/github/v/release/nicxe/homeassistant-trafikinfo-se-card) ![GitHub Downloads (all assets, all releases)](https://img.shields.io/github/downloads/Nicxe/homeassistant-trafikinfo-se-card/total) ![GitHub Downloads (all assets, latest release)](https://img.shields.io/github/downloads/nicxe/homeassistant-trafikinfo-se-card/latest/total)
 
 ## Overview
 
-This custom card is designed for the [Trafikinfo SE](https://github.com/Nicxe/homeassistant-trafikinfo-se) allowing you to display trafic warnings from the Swedish Transport Administration (Trafikverket) on your Home Assistant dashboards.
+This custom card is designed for the [Trafikinfo SE](https://github.com/Nicxe/homeassistant-trafikinfo-se) integration allowing you to display trafic warnings from the Swedish Transport Administration (Trafikverket) on your Home Assistant dashboards.
 
 ## Installation
-
-You can install this card by following one of the guides below:
-
 ### With HACS (Recommended)
+
+The easiest way to install **Trafikinfo SE - Alert Card** is via **[HACS (Home Assistant Community Store)](https://hacs.xyz/)**
 
 [![Open your Home Assistant instance and open a repository inside the Home Assistant Community Store.](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=Nicxe&repository=homeassistant-trafikinfo-se-card&category=plugin)
 
+or
 1. Click on the three dots in the top right corner of the HACS overview menu.
 2. Select **Custom repositories**.
 3. Add the repository URL: `https://github.com/Nicxe/homeassistant-trafikinfo-se-card`.
