@@ -1,7 +1,4 @@
 /*
- * Trafikinfo SE Alert Card
- * @license MIT (c) 2026
- *
  * UI/UX intentionally aligned with:
  * - www/smhi-alert-card.js
  * - www/krisinformation-alert-card.js
