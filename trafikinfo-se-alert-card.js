@@ -6,7 +6,21 @@
  * - www/smhi-alert-card.js
  * - www/krisinformation-alert-card.js
  */
-import { LitElement, html, css } from 'https://unpkg.com/lit?module';
+// Använd HA:s inbyggda Lit om tillgängligt, annars fallback till CDN
+const getLit = async () => {
+  // Home Assistant 2023.4+ exponerar Lit globalt
+  if (window.LitElement && window.litHtml) {
+    return {
+      LitElement: window.LitElement,
+      html: window.litHtml.html,
+      css: window.litHtml.css,
+    };
+  }
+  // Fallback för äldre HA-versioner eller fristående testning
+  return import('https://unpkg.com/lit@3.1.0?module');
+};
+
+const { LitElement, html, css } = await getLit();
 
 const LEAFLET_CSS_HREF = 'https://unpkg.com/leaflet@1.9.4/dist/leaflet.css';
 const LEAFLET_JS_SRC = 'https://unpkg.com/leaflet@1.9.4/dist/leaflet.js';
@@ -253,6 +267,22 @@ class TrafikinfoSeAlertCard extends LitElement {
     this._maps = new Map();
   }
 
+  disconnectedCallback() {
+    super.disconnectedCallback();
+    // Rensa timers för att undvika minnesläckor
+    clearTimeout(this._holdTimer);
+    clearTimeout(this._tapTimer);
+    // Rensa Leaflet-kartinstanser
+    for (const [, entry] of this._maps.entries()) {
+      try {
+        entry?.map?.remove?.();
+      } catch (e) {
+        // Ignorera fel vid cleanup
+      }
+    }
+    this._maps.clear();
+  }
+
   setConfig(config) {
     if (!config?.entity) throw new Error('You must specify an entity.');
     const normalized = this._normalizeConfig(config);
@@ -403,11 +433,16 @@ class TrafikinfoSeAlertCard extends LitElement {
     return 'sev-message';
   }
 
+  _handleIconError(e) {
+    const img = e.target;
+    if (img) img.remove();
+  }
+
   _iconTemplate(item) {
     if (this.config.show_icon === false) return html``;
     const url = String(item?.icon_url || '').trim();
     if (url) {
-      return html`<img class="icon" src="${url}" alt="icon" onerror="this.onerror=null;this.remove();" />`;
+      return html`<img class="icon" src="${url}" alt="icon" @error=${(e) => this._handleIconError(e)} />`;
     }
     return html`<ha-icon class="icon" icon="mdi:alert" aria-hidden="true"></ha-icon>`;
   }
@@ -678,6 +713,7 @@ class TrafikinfoSeAlertCard extends LitElement {
               class="details-toggle compact"
               role="button"
               tabindex="0"
+              aria-expanded="${expanded}"
               title="${expanded ? t('hide_details') : t('show_details')}"
               @click=${(e) => this._toggleDetails(e, item, idx)}
               @pointerdown=${(e) => e.stopPropagation()}
@@ -889,13 +925,141 @@ class TrafikinfoSeAlertCard extends LitElement {
   }
 
   _fmtTs(value) {
+    return this._formatDate(value);
+  }
+
+  _formatDate(value) {
     if (!value) return '';
-    try {
-      const d = new Date(value);
-      return d.toLocaleString();
-    } catch (e) {
-      return String(value);
+    const date = this._parseDate(value);
+    if (!date) return String(value);
+    const locale = (this.hass?.language || this.hass?.locale?.language || 'en').toLowerCase();
+    const format = this.config?.date_format || 'locale';
+    if (format === 'weekday_time') {
+      return this._formatDateParts(
+        date,
+        locale,
+        { weekday: 'long' },
+        { hour: '2-digit', minute: '2-digit' },
+      );
     }
+    if (format === 'day_month_time') {
+      return this._formatDateParts(
+        date,
+        locale,
+        { day: 'numeric', month: 'long' },
+        { hour: '2-digit', minute: '2-digit' },
+      );
+    }
+    if (format === 'day_month_time_year') {
+      return this._formatDateParts(
+        date,
+        locale,
+        { day: 'numeric', month: 'long', year: 'numeric' },
+        { hour: '2-digit', minute: '2-digit' },
+      );
+    }
+    return date.toLocaleString(locale);
+  }
+
+  _formatDateParts(date, locale, dateOptions, timeOptions) {
+    const safeTimeOptions = timeOptions ? { ...timeOptions } : null;
+    if (safeTimeOptions && !Object.prototype.hasOwnProperty.call(safeTimeOptions, 'hour12')) {
+      safeTimeOptions.hour12 = false;
+    }
+    const dateStr = dateOptions
+      ? new Intl.DateTimeFormat(locale, dateOptions).format(date)
+      : '';
+    const timeStr = safeTimeOptions
+      ? new Intl.DateTimeFormat(locale, safeTimeOptions).format(date)
+      : '';
+    if (dateStr && timeStr) return `${dateStr} ${timeStr}`;
+    return dateStr || timeStr || '';
+  }
+
+  _parseDate(value) {
+    if (!value) return null;
+    if (value instanceof Date) {
+      return Number.isNaN(value.getTime()) ? null : value;
+    }
+    if (typeof value === 'number') {
+      const numericDate = new Date(value);
+      return Number.isNaN(numericDate.getTime()) ? null : numericDate;
+    }
+    const raw = String(value).trim();
+    if (!raw) return null;
+    let normalized = raw;
+    if (/^\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}/.test(raw)) {
+      normalized = raw.replace(' ', 'T');
+    }
+    const parsed = new Date(normalized);
+    return Number.isNaN(parsed.getTime()) ? null : parsed;
+  }
+
+  _formatDate(value) {
+    if (!value) return '';
+    const date = this._parseDate(value);
+    if (!date) return String(value);
+    const locale = (this.hass?.language || this.hass?.locale?.language || 'en').toLowerCase();
+    const format = this.config?.date_format || 'locale';
+    if (format === 'weekday_time') {
+      return this._formatDateParts(
+        date,
+        locale,
+        { weekday: 'long' },
+        { hour: '2-digit', minute: '2-digit' },
+      );
+    }
+    if (format === 'day_month_time') {
+      return this._formatDateParts(
+        date,
+        locale,
+        { day: 'numeric', month: 'long' },
+        { hour: '2-digit', minute: '2-digit' },
+      );
+    }
+    if (format === 'day_month_time_year') {
+      return this._formatDateParts(
+        date,
+        locale,
+        { day: 'numeric', month: 'long', year: 'numeric' },
+        { hour: '2-digit', minute: '2-digit' },
+      );
+    }
+    return date.toLocaleString(locale);
+  }
+
+  _formatDateParts(date, locale, dateOptions, timeOptions) {
+    const safeTimeOptions = timeOptions ? { ...timeOptions } : null;
+    if (safeTimeOptions && !Object.prototype.hasOwnProperty.call(safeTimeOptions, 'hour12')) {
+      safeTimeOptions.hour12 = false;
+    }
+    const dateStr = dateOptions
+      ? new Intl.DateTimeFormat(locale, dateOptions).format(date)
+      : '';
+    const timeStr = safeTimeOptions
+      ? new Intl.DateTimeFormat(locale, safeTimeOptions).format(date)
+      : '';
+    if (dateStr && timeStr) return `${dateStr} ${timeStr}`;
+    return dateStr || timeStr || '';
+  }
+
+  _parseDate(value) {
+    if (!value) return null;
+    if (value instanceof Date) {
+      return Number.isNaN(value.getTime()) ? null : value;
+    }
+    if (typeof value === 'number') {
+      const numericDate = new Date(value);
+      return Number.isNaN(numericDate.getTime()) ? null : numericDate;
+    }
+    const raw = String(value).trim();
+    if (!raw) return null;
+    let normalized = raw;
+    if (/^\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}/.test(raw)) {
+      normalized = raw.replace(' ', 'T');
+    }
+    const parsed = new Date(normalized);
+    return Number.isNaN(parsed.getTime()) ? null : parsed;
   }
 
   _showHeader() {
@@ -1272,7 +1436,12 @@ class TrafikinfoSeAlertCard extends LitElement {
     if (normalized.map_scroll_wheel === undefined) normalized.map_scroll_wheel = false;
     if (normalized.max_items === undefined) normalized.max_items = 0;
     if (normalized.sort_order === undefined) normalized.sort_order = 'severity_then_time';
+    if (normalized.date_format === undefined) normalized.date_format = 'locale';
     if (normalized.group_by === undefined) normalized.group_by = 'none';
+    const allowedDateFormats = ['locale', 'day_month_time', 'weekday_time', 'day_month_time_year'];
+    if (!allowedDateFormats.includes(normalized.date_format)) {
+      normalized.date_format = 'locale';
+    }
 
     // Headline customization (optional). When empty/not set: keep old auto headline behavior.
     if (!Array.isArray(normalized.headline_fields)) normalized.headline_fields = [];
@@ -1373,6 +1542,7 @@ class TrafikinfoSeAlertCard extends LitElement {
       map_scroll_wheel: false,
       max_items: 0,
       sort_order: 'severity_then_time',
+      date_format: 'locale',
       group_by: 'none',
       filter_severities: [],
       filter_roads: [],
@@ -1428,6 +1598,7 @@ class TrafikinfoSeViktigTrafikinformationCard extends TrafikinfoSeAlertCard {
       // Headline: empty means "auto" (backwards compatible default)
       headline_fields: [],
       headline_separator: ' ',
+      date_format: 'locale',
       // If true: period+text are hidden behind the details toggle by default.
       // If false: show everything directly (no details toggle).
       use_details: true,
@@ -1472,6 +1643,26 @@ class TrafikinfoSeAlertCardEditor extends LitElement {
   render() {
     if (!this.hass || !this._config) return html``;
     const preset = String(this._config.preset || 'accident');
+    const lang = (this.hass?.language || this.hass?.locale?.language || 'en').toLowerCase();
+    const dateFormatOptions = lang.startsWith('sv')
+      ? [
+          { value: 'locale', label: 'Systemstandard' },
+          { value: 'day_month_time', label: '14 januari 13:00' },
+          { value: 'weekday_time', label: 'Onsdag 13:00' },
+          { value: 'day_month_time_year', label: '14 januari 2026 13:00' },
+        ]
+      : [
+          { value: 'locale', label: 'System default' },
+          { value: 'day_month_time', label: '14 January 13:00' },
+          { value: 'weekday_time', label: 'Wednesday 13:00' },
+          { value: 'day_month_time_year', label: '14 January 2026 13:00' },
+        ];
+    const dateFormatLabel = lang.startsWith('sv') ? 'Datumformat' : 'Date format';
+    const dateFormatField = {
+      name: 'date_format',
+      label: dateFormatLabel,
+      selector: { select: { mode: 'dropdown', options: dateFormatOptions } },
+    };
     const schema = [
       // Restrict the picker to the Trafikinfo SE integration sensors for clarity.
       { name: 'entity', label: 'Entity', required: true, selector: { entity: { domain: 'sensor', integration: 'trafikinfo_se' } } },
@@ -1504,7 +1695,7 @@ class TrafikinfoSeAlertCardEditor extends LitElement {
       { name: 'hold_action', label: 'Hold action', selector: { ui_action: {} } },
     ];
     if (preset === 'important') {
-      schema.splice(6, 0, { name: 'use_details', label: 'Use details (collapse/expand)', selector: { boolean: {} } });
+      schema.splice(6, 0, { name: 'use_details', label: 'Use details (collapse/expand)', selector: { boolean: {} } }, dateFormatField);
     }
     if (preset !== 'important') {
       schema.splice(6, 0,
@@ -1520,6 +1711,7 @@ class TrafikinfoSeAlertCardEditor extends LitElement {
             { value: 'time_desc', label: 'Time (newest first)' },
           ] } },
         },
+        dateFormatField,
         { name: 'group_by', label: 'Group by', selector: { select: { mode: 'dropdown', options: [
           { value: 'none', label: 'No grouping' },
           { value: 'road', label: 'By road' },
@@ -1552,6 +1744,7 @@ class TrafikinfoSeAlertCardEditor extends LitElement {
       use_details: this._config.use_details !== undefined ? this._config.use_details : true,
       max_items: this._config.max_items ?? 0,
       sort_order: this._config.sort_order || 'severity_then_time',
+      date_format: this._config.date_format || 'locale',
       group_by: this._config.group_by || 'none',
       filter_severities: this._config.filter_severities || [],
       filter_roads: Array.isArray(this._config.filter_roads)
@@ -1750,6 +1943,7 @@ class TrafikinfoSeAlertCardEditor extends LitElement {
   }
 
   _computeLabel = (schema) => {
+    if (schema.label) return schema.label;
     const labels = {
       entity: 'Entity',
       title: 'Title',
@@ -1765,6 +1959,7 @@ class TrafikinfoSeAlertCardEditor extends LitElement {
       use_details: 'Use details (collapse/expand)',
       max_items: 'Max items',
       sort_order: 'Sort order',
+      date_format: 'Date format',
       group_by: 'Group by',
       filter_severities: 'Filter severities',
       filter_roads: 'Filter roads (comma/semicolon-separated)',
@@ -2520,13 +2715,7 @@ class TrafikinfoSeMapCard extends LitElement {
   }
 
   _fmtTs(value) {
-    if (!value) return '';
-    try {
-      const d = new Date(value);
-      return d.toLocaleString();
-    } catch (e) {
-      return String(value);
-    }
+    return this._formatDate(value);
   }
 
   _normalizeMultiline(value) {
@@ -2786,5 +2975,3 @@ window.customCards.push({
   description: 'Visa händelser från flera Trafikinfo SE-sensorer på en gemensam karta.',
   preview: true,
 });
-
-
