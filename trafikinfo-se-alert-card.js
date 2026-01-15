@@ -257,6 +257,51 @@ class TrafikinfoSeAlertCard extends LitElement {
 
     a { color: var(--primary-color); text-decoration: none; }
     a:hover { text-decoration: underline; }
+
+    /* Dismiss button - inline in title row */
+    .dismiss-btn {
+      width: 28px;
+      height: 28px;
+      border: none;
+      background: transparent;
+      cursor: pointer;
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      opacity: 0.5;
+      transition: opacity 150ms ease, background 150ms ease;
+      padding: 0;
+      flex-shrink: 0;
+      margin-left: 4px;
+    }
+    .dismiss-btn:hover {
+      opacity: 1;
+      background: var(--secondary-background-color, rgba(0,0,0,0.1));
+    }
+    .dismiss-btn ha-icon {
+      --mdc-icon-size: 18px;
+      color: var(--secondary-text-color);
+    }
+
+    /* Dismissed count footer */
+    .dismissed-footer {
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      gap: 8px;
+      padding: 8px var(--trafikinfo-alert-outer-padding, 0px);
+      color: var(--secondary-text-color);
+      font-size: 0.9em;
+    }
+    .dismissed-footer .restore-link {
+      color: var(--primary-color);
+      cursor: pointer;
+      text-decoration: none;
+    }
+    .dismissed-footer .restore-link:hover {
+      text-decoration: underline;
+    }
   `;
 
   constructor() {
@@ -465,11 +510,27 @@ class TrafikinfoSeAlertCard extends LitElement {
       ? t('max_items_zero')
       : this._emptyTextForCategory(category);
 
+    // Dismissed count from sensor attributes
+    const dismissedCount = Number(stateObj?.attributes?.dismissed_count || 0);
+    const showDismissedFooter = this.config?.enable_dismiss === true
+      && this.config?.show_dismissed_count !== false
+      && dismissedCount > 0;
+
+    const dismissedText = dismissedCount === 1
+      ? t('dismissed_count_one')
+      : t('dismissed_count').replace('{count}', String(dismissedCount));
+
     return html`
       <ha-card .header=${header} style=${mapStyle}>
         ${events.length === 0
           ? html`<div class="empty">${emptyText}</div>`
           : html`<div class="alerts">${this._renderGrouped(events)}</div>`}
+        ${showDismissedFooter ? html`
+          <div class="dismissed-footer">
+            <span>${dismissedText}</span>
+            <span class="restore-link" @click=${(e) => this._restoreAllEvents(e)}>${t('restore_all')}</span>
+          </div>
+        ` : html``}
       </ha-card>
     `;
   }
@@ -677,6 +738,7 @@ class TrafikinfoSeAlertCard extends LitElement {
     const detailsBlocks = buildSectionBlocks(detailsKeys, 'details');
     const expandable = sectionHasPotentialContent(detailsKeys);
     const isCompact = !expanded && inlineBlocks.length === 0;
+    const showDismiss = this.config?.enable_dismiss === true && item?.event_key;
 
     return html`
       <div
@@ -714,6 +776,17 @@ class TrafikinfoSeAlertCard extends LitElement {
                   ${expanded ? t('hide_details') : t('show_details')}
                 </div>
               </div>
+            ` : html``}
+            ${showDismiss ? html`
+              <button
+                class="dismiss-btn"
+                title="${t('dismiss')}"
+                @click=${(e) => this._dismissEvent(e, item)}
+                @pointerdown=${(e) => e.stopPropagation()}
+                @pointerup=${(e) => e.stopPropagation()}
+              >
+                <ha-icon icon="mdi:eye-off-outline"></ha-icon>
+              </button>
             ` : html``}
           </div>
           ${inlineBlocks.length > 0 ? html`${inlineBlocks}` : html``}
@@ -873,6 +946,62 @@ class TrafikinfoSeAlertCard extends LitElement {
     e.stopPropagation();
     const key = this._alertKey(item, idx);
     this._expanded = { ...this._expanded, [key]: !this._expanded[key] };
+  }
+
+  async _dismissEvent(e, item) {
+    e.stopPropagation();
+    e.preventDefault();
+
+    const stateObj = this._stateObj();
+    if (!stateObj) return;
+
+    const entryId = stateObj.attributes?.entry_id;
+    const eventKey = item?.event_key;
+    if (!entryId || !eventKey) {
+      console.warn('Cannot dismiss: missing entry_id or event_key');
+      return;
+    }
+
+    const serviceData = {
+      entry_id: entryId,
+      event_key: eventKey,
+    };
+
+    // If dismiss_behavior is 'until_update', include signature
+    if (this.config?.dismiss_behavior === 'until_update') {
+      const signature = item?.event_signature;
+      if (signature) {
+        serviceData.signature = signature;
+      }
+    }
+
+    try {
+      await this.hass.callService('trafikinfo_se', 'dismiss_event', serviceData);
+    } catch (err) {
+      console.error('Failed to dismiss event:', err);
+    }
+  }
+
+  async _restoreAllEvents(e) {
+    e.stopPropagation();
+    e.preventDefault();
+
+    const stateObj = this._stateObj();
+    if (!stateObj) return;
+
+    const entryId = stateObj.attributes?.entry_id;
+    if (!entryId) {
+      console.warn('Cannot restore: missing entry_id');
+      return;
+    }
+
+    try {
+      await this.hass.callService('trafikinfo_se', 'restore_all_events', {
+        entry_id: entryId,
+      });
+    } catch (err) {
+      console.error('Failed to restore events:', err);
+    }
   }
 
   _onPointerDown(e) {
@@ -1384,6 +1513,10 @@ class TrafikinfoSeAlertCard extends LitElement {
         map_loading_leaflet: 'Loading map (Leaflet)…',
         map_rendering: 'Rendering location…',
         map_failed: 'Map failed to load (blocked by browser/HA CSP)',
+        dismiss: 'Dismiss',
+        dismissed_count: '{count} dismissed',
+        dismissed_count_one: '1 dismissed',
+        restore_all: 'Restore all',
       },
       sv: {
         no_alerts: 'Inga händelser',
@@ -1414,6 +1547,10 @@ class TrafikinfoSeAlertCard extends LitElement {
         map_loading_leaflet: 'Laddar karta (Leaflet)…',
         map_rendering: 'Ritar plats…',
         map_failed: 'Kartan kunde inte laddas (blockerad av webbläsare/HA CSP)',
+        dismiss: 'Dölj',
+        dismissed_count: '{count} dolda',
+        dismissed_count_one: '1 dold',
+        restore_all: 'Återställ alla',
       },
     };
     return (dict[lang] || dict.en)[key] || key;
@@ -1463,6 +1600,14 @@ class TrafikinfoSeAlertCard extends LitElement {
     if (normalized.show_lanes_restricted === undefined) normalized.show_lanes_restricted = false;
     if (normalized.show_safety_related === undefined) normalized.show_safety_related = false;
     if (normalized.show_suspended === undefined) normalized.show_suspended = false;
+
+    // Dismiss/acknowledge functionality
+    if (normalized.enable_dismiss === undefined) normalized.enable_dismiss = false;
+    if (normalized.dismiss_behavior === undefined) normalized.dismiss_behavior = 'until_update';
+    if (!['until_update', 'permanent'].includes(normalized.dismiss_behavior)) {
+      normalized.dismiss_behavior = 'until_update';
+    }
+    if (normalized.show_dismissed_count === undefined) normalized.show_dismissed_count = true;
 
     if (!Array.isArray(normalized.filter_severities)) normalized.filter_severities = [];
     // `filter_roads` is edited as a string for better UX; normalize to array here.
@@ -1689,6 +1834,16 @@ class TrafikinfoSeAlertCardEditor extends LitElement {
       { name: 'show_header', label: 'Show header', selector: { boolean: {} } },
       { name: 'show_icon', label: 'Show icon', selector: { boolean: {} } },
       { name: 'severity_background', label: 'Severity background', selector: { boolean: {} } },
+      { name: 'enable_dismiss', label: 'Enable dismiss', selector: { boolean: {} } },
+      {
+        name: 'dismiss_behavior',
+        label: 'Dismiss behavior',
+        selector: { select: { mode: 'dropdown', options: [
+          { value: 'until_update', label: 'Show again when updated' },
+          { value: 'permanent', label: 'Permanently hidden' },
+        ] } },
+      },
+      { name: 'show_dismissed_count', label: 'Show dismissed count', selector: { boolean: {} } },
       // actions
       { name: 'tap_action', label: 'Tap action', selector: { ui_action: {} } },
       { name: 'double_tap_action', label: 'Double tap action', selector: { ui_action: {} } },
@@ -1737,6 +1892,9 @@ class TrafikinfoSeAlertCardEditor extends LitElement {
       show_header: this._config.show_header !== undefined ? this._config.show_header : true,
       show_icon: this._config.show_icon !== undefined ? this._config.show_icon : true,
       severity_background: this._config.severity_background !== undefined ? this._config.severity_background : false,
+      enable_dismiss: this._config.enable_dismiss !== undefined ? this._config.enable_dismiss : false,
+      dismiss_behavior: this._config.dismiss_behavior || 'until_update',
+      show_dismissed_count: this._config.show_dismissed_count !== undefined ? this._config.show_dismissed_count : true,
       show_map: this._config.show_map !== undefined ? this._config.show_map : false,
       map_height: this._config.map_height !== undefined ? this._config.map_height : 170,
       map_zoom_controls: this._config.map_zoom_controls !== undefined ? this._config.map_zoom_controls : true,
