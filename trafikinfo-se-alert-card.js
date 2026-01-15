@@ -210,7 +210,10 @@ class TrafikinfoSeAlertCard extends LitElement {
     }
     .geo-map {
       width: 100%;
-      height: var(--trafikinfo-alert-map-height, 170px);
+      aspect-ratio: var(--trafikinfo-alert-map-aspect, 16 / 9);
+      height: auto;
+      min-height: var(--trafikinfo-alert-map-min-height, 140px);
+      max-height: var(--trafikinfo-alert-map-max-height, 260px);
       /* Leaflet attaches panes/controls with high z-index; lock them into this local stacking context */
       position: relative;
       z-index: 0 !important;
@@ -516,9 +519,6 @@ class TrafikinfoSeAlertCard extends LitElement {
       ? (this.config.title || stateObj?.attributes?.friendly_name || 'Trafikinfo')
       : undefined;
 
-    const mapHeight = Number(this.config?.map_height || 170);
-    const mapStyle = this.config?.show_map ? `--trafikinfo-alert-map-height: ${mapHeight}px;` : '';
-
     const eventsTotal = Number(stateObj?.attributes?.events_total || 0);
     const sensorMaxItems = Number(stateObj?.attributes?.max_items ?? null);
     const hasMoreButCapped = events.length === 0 && eventsTotal > 0 && sensorMaxItems === 0;
@@ -538,7 +538,7 @@ class TrafikinfoSeAlertCard extends LitElement {
       : t('dismissed_count').replace('{count}', String(dismissedCount));
 
     return html`
-      <ha-card .header=${header} style=${mapStyle}>
+      <ha-card .header=${header}>
         ${events.length === 0
           ? html`<div class="empty">${emptyText}</div>`
           : html`<div class="alerts">${this._renderGrouped(events)}</div>`}
@@ -1351,6 +1351,8 @@ class TrafikinfoSeAlertCard extends LitElement {
       return;
     }
     const sig = `${pts.length}|${String(pts[0]?.[0] || '')},${String(pts[0]?.[1] || '')}|${this._severityBucket(item)}`;
+    const mapZoom = Number.isFinite(this.config?.map_zoom) ? this.config.map_zoom : null;
+    const zoomKey = mapZoom === null ? 'auto' : String(mapZoom);
     const existing = this._maps.get(key);
     const containerChanged = existing?.container && existing.container !== containerEl;
     if (existing && containerChanged) {
@@ -1374,10 +1376,11 @@ class TrafikinfoSeAlertCard extends LitElement {
         maxZoom: 18,
         attribution: '&copy; OpenStreetMap contributors',
       }).addTo(map);
-      entry = { map, layer: null, sig: '', container: containerEl };
+      entry = { map, layer: null, sig: '', container: containerEl, zoomKey: 'auto' };
       this._maps.set(key, entry);
     }
 
+    let layerUpdated = false;
     if (entry.sig !== sig) {
       if (statusEl) {
         statusEl.textContent = this._t('map_rendering');
@@ -1386,23 +1389,44 @@ class TrafikinfoSeAlertCard extends LitElement {
       try { entry.layer?.remove?.(); } catch (e) {}
 
       const style = this._severityStyle(item);
-      const zoomOutSteps = 2; // default: zoom out a bit for better overview
       if (pts.length === 1) {
         entry.layer = L.circleMarker(pts[0], { ...style, radius: 8 }).addTo(entry.map);
-        entry.map.setView(pts[0], 14);
-        try { entry.map.zoomOut(zoomOutSteps); } catch (e) {}
       } else {
         // If multiple points, draw a polyline and fit bounds.
         entry.layer = L.polyline(pts, style).addTo(entry.map);
+      }
+      entry.sig = sig;
+      layerUpdated = true;
+    }
+
+    if (layerUpdated || entry.zoomKey !== zoomKey) {
+      const zoomOutSteps = 2; // default: zoom out a bit for better overview
+      if (pts.length === 1) {
+        if (mapZoom !== null) {
+          entry.map.setView(pts[0], mapZoom);
+        } else {
+          entry.map.setView(pts[0], 14);
+          try { entry.map.zoomOut(zoomOutSteps); } catch (e) {}
+        }
+      } else {
         try {
-          const bounds = entry.layer.getBounds?.();
+          const bounds = entry.layer?.getBounds?.();
           if (bounds && bounds.isValid && bounds.isValid()) {
-            entry.map.fitBounds(bounds, { padding: [12, 12] });
-            try { entry.map.zoomOut(zoomOutSteps); } catch (e) {}
+            if (mapZoom !== null) {
+              const center = bounds.getCenter?.();
+              if (center) {
+                entry.map.setView(center, mapZoom);
+              } else {
+                entry.map.fitBounds(bounds, { padding: [12, 12] });
+              }
+            } else {
+              entry.map.fitBounds(bounds, { padding: [12, 12] });
+              try { entry.map.zoomOut(zoomOutSteps); } catch (e) {}
+            }
           }
         } catch (e) {}
       }
-      entry.sig = sig;
+      entry.zoomKey = zoomKey;
     }
 
     requestAnimationFrame(() => {
@@ -1609,9 +1633,14 @@ class TrafikinfoSeAlertCard extends LitElement {
     if (normalized.show_icon === undefined) normalized.show_icon = true;
     if (normalized.severity_background === undefined) normalized.severity_background = false;
     if (normalized.show_map === undefined) normalized.show_map = false;
-    if (normalized.map_height === undefined) normalized.map_height = 170;
     if (normalized.map_zoom_controls === undefined) normalized.map_zoom_controls = true;
     if (normalized.map_scroll_wheel === undefined) normalized.map_scroll_wheel = false;
+    if (normalized.map_zoom === '' || normalized.map_zoom === null || normalized.map_zoom === undefined) {
+      normalized.map_zoom = null;
+    } else {
+      const zoomVal = Number(normalized.map_zoom);
+      normalized.map_zoom = Number.isFinite(zoomVal) ? Math.max(0, Math.min(18, zoomVal)) : null;
+    }
     if (normalized.max_items === undefined) normalized.max_items = 0;
     if (normalized.sort_order === undefined) normalized.sort_order = 'severity_then_time';
     if (normalized.date_format === undefined) normalized.date_format = 'locale';
@@ -1689,7 +1718,7 @@ class TrafikinfoSeAlertCard extends LitElement {
     if (Object.prototype.hasOwnProperty.call(normalized, 'show_road_number')) delete normalized.show_road_number;
     if (Object.prototype.hasOwnProperty.call(normalized, 'hide_when_empty')) delete normalized.hide_when_empty;
     // Ensure numeric
-    normalized.map_height = Number(normalized.map_height || 170);
+    if (Object.prototype.hasOwnProperty.call(normalized, 'map_height')) delete normalized.map_height;
     return normalized;
   }
 
@@ -1723,7 +1752,7 @@ class TrafikinfoSeAlertCard extends LitElement {
       show_icon: true,
       severity_background: false,
       show_map: false,
-      map_height: 170,
+      map_zoom: null,
       map_zoom_controls: true,
       map_scroll_wheel: false,
       max_items: 0,
@@ -1814,6 +1843,9 @@ class TrafikinfoSeAlertCardEditor extends LitElement {
 
   static styles = css`
     .container { padding: 8px 0 0 0; }
+    .map-hint { margin: 10px 0 12px 0; padding: 0 12px; }
+    .map-hint .hint-title { font-weight: 600; margin-bottom: 4px; }
+    .map-hint .hint-text { color: var(--secondary-text-color); font-size: 0.95em; line-height: 1.4; }
     .meta-fields { margin: 12px 0; padding: 8px 12px; }
     .meta-fields-title { color: var(--secondary-text-color); margin-bottom: 6px; }
     .meta-row { display: grid; grid-template-columns: 1fr auto auto; align-items: center; gap: 8px; padding: 6px 0; }
@@ -1823,7 +1855,9 @@ class TrafikinfoSeAlertCardEditor extends LitElement {
   `;
 
   setConfig(config) {
-    this._config = config;
+    const next = { ...config };
+    if (Object.prototype.hasOwnProperty.call(next, 'map_height')) delete next.map_height;
+    this._config = next;
   }
 
   render() {
@@ -1896,7 +1930,7 @@ class TrafikinfoSeAlertCardEditor extends LitElement {
     if (preset !== 'important') {
       schema.splice(6, 0,
         { name: 'show_map', label: 'Show map (location)', selector: { boolean: {} } },
-        { name: 'map_height', label: 'Map height (px)', selector: { number: { min: 90, max: 420, mode: 'box' } } },
+        { name: 'map_zoom', label: 'Map zoom level (0 = world, 18 = street)', selector: { number: { min: 0, max: 18, mode: 'box' } } },
         { name: 'map_zoom_controls', label: 'Map zoom controls (+/−)', selector: { boolean: {} } },
         { name: 'map_scroll_wheel', label: 'Map scroll wheel zoom', selector: { boolean: {} } },
         { name: 'max_items', label: 'Max items', selector: { number: { min: 0, mode: 'box' } } },
@@ -1937,7 +1971,7 @@ class TrafikinfoSeAlertCardEditor extends LitElement {
       dismiss_behavior: this._config.dismiss_behavior || 'until_update',
       show_dismissed_count: this._config.show_dismissed_count !== undefined ? this._config.show_dismissed_count : true,
       show_map: this._config.show_map !== undefined ? this._config.show_map : false,
-      map_height: this._config.map_height !== undefined ? this._config.map_height : 170,
+      map_zoom: this._config.map_zoom !== undefined && this._config.map_zoom !== null ? this._config.map_zoom : undefined,
       map_zoom_controls: this._config.map_zoom_controls !== undefined ? this._config.map_zoom_controls : true,
       map_scroll_wheel: this._config.map_scroll_wheel !== undefined ? this._config.map_scroll_wheel : false,
       use_details: this._config.use_details !== undefined ? this._config.use_details : true,
@@ -1986,6 +2020,17 @@ class TrafikinfoSeAlertCardEditor extends LitElement {
     const schemaTop = schema.filter((s) => !['tap_action','double_tap_action','hold_action'].includes(s.name));
     const schemaActions = schema.filter((s) => ['tap_action','double_tap_action','hold_action'].includes(s.name));
 
+    const zoomHint = lang.startsWith('sv')
+      ? {
+          title: 'Zoomnivå',
+          text: '0 = hela världen, 18 = gatunivå (mycket nära). Lämna tomt för automatisk zoom.',
+        }
+      : {
+          title: 'Zoom level',
+          text: '0 = whole world, 18 = street level (very close). Leave empty for automatic zoom.',
+        };
+    const showZoomHint = preset !== 'important' && data.show_map;
+
     return html`
       <div class="container">
         <ha-form
@@ -1995,6 +2040,12 @@ class TrafikinfoSeAlertCardEditor extends LitElement {
           .computeLabel=${this._computeLabel}
           @value-changed=${this._valueChanged}
         ></ha-form>
+        ${showZoomHint ? html`
+          <div class="map-hint">
+            <div class="hint-title">${zoomHint.title}</div>
+            <div class="hint-text">${zoomHint.text}</div>
+          </div>
+        ` : html``}
         ${preset === 'important' ? html`` : html`
           <div class="meta-fields">
             ${filledOrder.map((key, index) => {
@@ -2152,7 +2203,7 @@ class TrafikinfoSeAlertCardEditor extends LitElement {
       show_icon: 'Show icon',
       severity_background: 'Severity background',
       show_map: 'Show map (location)',
-      map_height: 'Map height (px)',
+      map_zoom: 'Map zoom level (0 = world, 18 = street)',
       map_zoom_controls: 'Map zoom controls (+/−)',
       map_scroll_wheel: 'Map scroll wheel zoom',
       use_details: 'Use details (collapse/expand)',
