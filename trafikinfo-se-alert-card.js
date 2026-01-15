@@ -28,6 +28,8 @@ class TrafikinfoSeAlertCard extends LitElement {
     hass: {},
     config: {},
     _expanded: {},
+    _pendingDismiss: {},
+    _dismissingKeys: {},
   };
 
   static styles = css`
@@ -258,6 +260,16 @@ class TrafikinfoSeAlertCard extends LitElement {
     a { color: var(--primary-color); text-decoration: none; }
     a:hover { text-decoration: underline; }
 
+    /* Dismiss animation */
+    .alert.dismissing {
+      animation: dismiss-fade 250ms ease-out forwards;
+      pointer-events: none;
+    }
+    @keyframes dismiss-fade {
+      0% { opacity: 1; transform: scale(1); }
+      100% { opacity: 0; transform: scale(0.96); }
+    }
+
     /* Dismiss button - inline in title row */
     .dismiss-btn {
       width: 28px;
@@ -307,6 +319,8 @@ class TrafikinfoSeAlertCard extends LitElement {
   constructor() {
     super();
     this._maps = new Map();
+    this._pendingDismiss = new Set();
+    this._dismissingKeys = new Set();
   }
 
   disconnectedCallback() {
@@ -389,6 +403,9 @@ class TrafikinfoSeAlertCard extends LitElement {
       .filter(Boolean);
 
     const filtered = events.filter((e) => {
+      // Optimistic dismiss: hide events that are pending dismissal
+      if (this._pendingDismiss?.has(e.event_key)) return false;
+
       const sev = this._severityBucket(e);
       // Important traffic info typically has no severity; ignore severity filter there
       const sevOk = preset === 'important' || filterSev.length === 0 || filterSev.includes(sev);
@@ -739,10 +756,11 @@ class TrafikinfoSeAlertCard extends LitElement {
     const expandable = sectionHasPotentialContent(detailsKeys);
     const isCompact = !expanded && inlineBlocks.length === 0;
     const showDismiss = this.config?.enable_dismiss === true && item?.event_key;
+    const isDismissing = this._dismissingKeys?.has(item?.event_key);
 
     return html`
       <div
-        class="alert ${sevClass} ${sevBgClass} ${isCompact ? 'compact' : ''}"
+        class="alert ${sevClass} ${sevBgClass} ${isCompact ? 'compact' : ''} ${isDismissing ? 'dismissing' : ''}"
         role="button"
         tabindex="0"
         aria-label="${headline}"
@@ -962,6 +980,21 @@ class TrafikinfoSeAlertCard extends LitElement {
       return;
     }
 
+    // Start dismiss animation
+    this._dismissingKeys = new Set(this._dismissingKeys);
+    this._dismissingKeys.add(eventKey);
+    this.requestUpdate();
+
+    // Wait for animation to complete
+    await new Promise((resolve) => setTimeout(resolve, 250));
+
+    // Move from animating to hidden
+    this._dismissingKeys = new Set(this._dismissingKeys);
+    this._dismissingKeys.delete(eventKey);
+    this._pendingDismiss = new Set(this._pendingDismiss);
+    this._pendingDismiss.add(eventKey);
+    this.requestUpdate();
+
     const serviceData = {
       entry_id: entryId,
       event_key: eventKey,
@@ -979,6 +1012,10 @@ class TrafikinfoSeAlertCard extends LitElement {
       await this.hass.callService('trafikinfo_se', 'dismiss_event', serviceData);
     } catch (err) {
       console.error('Failed to dismiss event:', err);
+      // On error, restore the event in UI
+      this._pendingDismiss = new Set(this._pendingDismiss);
+      this._pendingDismiss.delete(eventKey);
+      this.requestUpdate();
     }
   }
 
@@ -999,6 +1036,10 @@ class TrafikinfoSeAlertCard extends LitElement {
       await this.hass.callService('trafikinfo_se', 'restore_all_events', {
         entry_id: entryId,
       });
+      // Clear local pending state so events can appear again
+      this._pendingDismiss = new Set();
+      this._dismissingKeys = new Set();
+      this.requestUpdate();
     } catch (err) {
       console.error('Failed to restore events:', err);
     }
