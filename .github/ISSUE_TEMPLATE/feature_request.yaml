@@ -1,27 +1,12 @@
-name: 🚀 Feature Request
-description: Suggest an improvement or new feature
-title: "[Feature]: "
-labels: ["enhancement"]
-assignees: ["Nicxe"]
+name: 🚚 Repository moved
+description: This repository is no longer the active source for the alert card.
+title: "[Moved]: "
+labels: ["question"]
 body:
-  - type: textarea
-    id: problem
+  - type: markdown
     attributes:
-      label: Problem to Solve
-      description: What problem does this feature address?
-    validations:
-      required: true
+      value: |
+        This repository has moved.
 
-  - type: textarea
-    id: solution
-    attributes:
-      label: Proposed Solution
-      description: How should it work?
-    validations:
-      required: true
-
-  - type: textarea
-    id: alternatives
-    attributes:
-      label: Alternatives
-      description: Any alternative approaches?
+        Please submit feature requests in:
+        https://github.com/Nicxe/homeassistant-trafikinfo-se/issues/new/choose

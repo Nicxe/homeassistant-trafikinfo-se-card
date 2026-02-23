@@ -1,9 +1,11 @@
-name: ❓ Question
-description: Ask a question about Trafikinfo SE
+name: 🚚 Repository moved
+description: This repository is no longer the active source for the alert card.
 labels: ["question"]
 body:
   - type: markdown
     attributes:
       value: |
-        Please use the Home Assistant Community Forum for support and questions:
+        This repository has moved.
+
+        Please ask questions in:
         https://community.home-assistant.io/t/trafikinfo-se-real-time-swedish-traffic-alerts-for-home-assistant/973654
